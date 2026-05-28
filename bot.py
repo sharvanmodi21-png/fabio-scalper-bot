@@ -371,7 +371,6 @@ class ScalpingBot:
                 time.sleep(0.1)
                 continue
             self.tick_received = False
-
             # Pull recent higher‑timeframe klines for market‑state detection
             try:
                 df = fetch_kline(self.exchange, self.SYMBOL, timeframe="30m", limit=5)
