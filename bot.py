@@ -356,15 +356,15 @@ class ScalpingBot:
                 time.sleep(30)  # pause longer when market is closed
                 continue
             # Daily reset of loss counter
-                if datetime.utcnow() >= self.daily_reset_time:
-                    if self.paper_wallet:
-                        self.paper_wallet.reset_daily()
-                    self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-                    # Update summary time after daily reset
-                    self.last_summary_time = datetime.utcnow()
-                    # Daily loss limit (2% of initial capital by default)
-                    self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
-                    self.last_summary_time = datetime.utcnow()
+            if datetime.utcnow() >= self.daily_reset_time:
+                if self.paper_wallet:
+                    self.paper_wallet.reset_daily()
+                self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                # Update summary time after daily reset
+                self.last_summary_time = datetime.utcnow()
+                # Daily loss limit (2% of initial capital by default)
+                self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
+                self.last_summary_time = datetime.utcnow()
 
             # Wait for a new depth tick
             if not getattr(self, "tick_received", False):
