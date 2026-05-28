@@ -1,0 +1,15 @@
+{
+  "apiKey": "txDmUgXydB4C4SQIxgqJfNaqxmOyNYoK1cKD2PLrUtBYGqNLNLeCr56o9hH4pVpy",
+  "secret": "dwc4aJKkHO4EePsKxLJ3i3QlOZAlcAtFeaEVNpVd43K4h9fx4Li4I1QYd0AYLkjS",
+  "mode": "paper",
+  "risk_percent": 0.5,
+  "max_consecutive_losses": 3,
+  "daily_loss_percent": 2,
+  "log_file": "fabio valentini bot.log",
+  "volume_profile_bins": 50,
+  "lvn_percentile": 5,
+  "cvd_window_seconds": 30,
+  "aggression_spike_factor": 3,
+  "trailing_stop_enabled": true,
+  "daily_loss_percent": 2
+}
