@@ -131,57 +131,6 @@ class PaperWallet:
         else:
             self.consecutive_losses = 0
         self.position = None
-    def reset_daily(self):
-        self.consecutive_losses = 0
-        logger.info("Daily loss counter reset.")
-
-    def equity(self) -> float:
-        """Current equity in USDT (USDT + BTC * last_price)."""
-        price = self._last_price if hasattr(self, "_last_price") else 0.0
-        return self.usdt + self.btc * price
-
-    def update_price(self, price: float):
-        self._last_price = price
-
-    def open_position(self, side: str, size_usdt: float, entry_price: float, sl: float, tp: float):
-        """Record a simulated position.
-
-        side – "long" or "short"
-        size_usdt – USD amount risked (not full notional)
-        """
-        qty = size_usdt / entry_price
-        self.position = {
-            "side": side,
-            "entry_price": entry_price,
-            "size_usdt": size_usdt,
-            "qty": qty,
-            "sl": sl,
-            "tp": tp,
-            "opened_at": datetime.utcnow(),
-        }
-        # Adjust cash for the used margin (full notional for simplicity)
-        self.usdt -= size_usdt
-        logger.info(f"[Paper] Opened {side} {qty:.6f} BTC @ {entry_price:.2f} (SL={sl:.2f} TP={tp:.2f})")
-
-    def close_position(self, price: float):
-        if not self.position:
-            return
-        side = self.position["side"]
-        qty = self.position["qty"]
-        pnl = (price - self.position["entry_price"]) * qty
-        if side == "short":
-            pnl = -pnl
-        self.usdt += self.position["size_usdt"] + pnl  # return used margin + PnL
-        self.btc += 0  # no actual BTC holds in paper mode
-        profit = pnl
-        logger.info(f"[Paper] Closed {side} @ {price:.2f}, PnL = {profit:.2f} USDT")
-        # Update loss counter
-        if profit < 0:
-            self.consecutive_losses += 1
-            logger.info(f"[Paper] Consecutive losses: {self.consecutive_losses}")
-        else:
-            self.consecutive_losses = 0
-        self.position = None
 
 # ---------------------------------------------------------------------------
 # Core Strategy Helpers
@@ -272,7 +221,6 @@ class ScalpingBot:
         self.depth: Dict = {"bids": [], "asks": []}
         self.consecutive_losses = 0
         self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        self.last_summary_time = datetime.utcnow()
         # Daily loss limit (2% of initial capital by default)
         self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
         self.last_summary_time = datetime.utcnow()
@@ -364,7 +312,6 @@ class ScalpingBot:
                 self.last_summary_time = datetime.utcnow()
                 # Daily loss limit (2% of initial capital by default)
                 self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
-                self.last_summary_time = datetime.utcnow()
 
             # Wait for a new depth tick
             if not getattr(self, "tick_received", False):
@@ -390,7 +337,7 @@ class ScalpingBot:
                 wallet = None  # placeholder
 
             # If we have an open paper position, evaluate SL/TP
-            if MODE == "paper" and wallet.position:
+            if MODE == "paper" and wallet and wallet.position:
                 pos = wallet.position
                 if pos["side"] == "long" and (self.last_price <= pos["sl"] or self.last_price >= pos["tp"]):
                     wallet.close_position(self.last_price)
@@ -400,7 +347,7 @@ class ScalpingBot:
                     continue
 
             # Enforce three‑loss rule (paper mode only for now)
-            if MODE == "paper" and wallet.consecutive_losses >= MAX_LOSSES:
+            if MODE == "paper" and wallet and wallet.consecutive_losses >= MAX_LOSSES:
                 logger.info("Three consecutive losses reached – pausing trading for today.")
                 time.sleep(60)  # sleep and re‑check later
                 continue
@@ -410,7 +357,7 @@ class ScalpingBot:
                 # Determine side – simplified: go long in imbalanced up‑move, short otherwise
                 side = "long" if market_state == "imbalance" else "short"
                 # Risk calculation – amount of USDT to risk
-                if MODE == "paper":
+                if MODE == "paper" and wallet:
                     equity = wallet.equity()
                 else:
                     # Live: fetch balance from exchange (placeholder)
@@ -425,7 +372,7 @@ class ScalpingBot:
                 qty = risk_amount / abs(self.last_price - sl)
                 # Place order
                 order = self.place_order("buy" if side == "long" else "sell", qty, self.last_price)
-                if MODE == "paper":
+                if MODE == "paper" and wallet:
                     wallet.open_position(side, risk_amount, self.last_price, sl, tp)
                 else:
                     # In live mode you would store the order ID and monitor fill status
