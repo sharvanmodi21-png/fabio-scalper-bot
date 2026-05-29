@@ -1,4 +1,3 @@
-# Fixed: IndentationError resolved - v2
 """btc_scalp_bot – A minimal implementation of Fabio Valentini's scalping strategy
 
 Features
