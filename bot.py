@@ -20,7 +20,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -102,7 +102,7 @@ class PaperWallet:
             "qty": qty,
             "sl": sl,
             "tp": tp,
-            "opened_at": datetime.utcnow(),
+            "opened_at": datetime.now(timezone.utc).replace(tzinfo=None),
         }
         # Deduct the risked amount from cash (margin placeholder)
         self.usdt -= size_usdt
@@ -157,7 +157,7 @@ class PaperWallet:
             "qty": qty,
             "sl": sl,
             "tp": tp,
-            "opened_at": datetime.utcnow(),
+            "opened_at": datetime.now(timezone.utc).replace(tzinfo=None),
         }
         # Adjust cash for the used margin (full notional for simplicity)
         self.usdt -= size_usdt
@@ -254,7 +254,7 @@ def should_enter_trade(state: str, lvns: List[float], price: float, depth: Dict)
 # ---------------------------------------------------------------------------
 class ScalpingBot:
     SYMBOL = "BTC/USDT"
-    WS_ENDPOINT = "wss://stream.binance.com:9443/ws/btcusdt@depth20"
+    WS_ENDPOINT = "wss://data-stream.binance.vision/ws/btcusdt@depth20"
 
     def __init__(self, config: dict):
         self.config = config
@@ -271,11 +271,11 @@ class ScalpingBot:
         self.last_price: float = 0.0
         self.depth: Dict = {"bids": [], "asks": []}
         self.consecutive_losses = 0
-        self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        self.last_summary_time = datetime.utcnow()
+        self.daily_reset_time = datetime.now(timezone.utc).replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
         # Daily loss limit (2% of initial capital by default)
         self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
-        self.last_summary_time = datetime.utcnow()
+        self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # -----------------------------------------------------------------------
     # WebSocket handling (depth stream)
@@ -345,7 +345,7 @@ class ScalpingBot:
         self.start_ws()
         while True:
             # Restrict trading to Mon‑Fri, 6 pm‑10 pm IST (12:30‑16:30 UTC)
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
             now_ist = now_utc + timedelta(hours=5, minutes=30)
             can_trade_time = now_ist.weekday() < 5 and 18 <= now_ist.hour < 22
             # If outside allowed window, skip entry logic but continue processing depth
@@ -356,14 +356,15 @@ class ScalpingBot:
                 time.sleep(30)  # pause longer when market is closed
                 continue
             # Daily reset of loss counter
-            if datetime.utcnow() >= self.daily_reset_time:
+            if datetime.now(timezone.utc).replace(tzinfo=None) >= self.daily_reset_time:
                 if self.paper_wallet:
                     self.paper_wallet.reset_daily()
-                self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                self.daily_reset_time = datetime.now(timezone.utc).replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
                 # Update summary time after daily reset
-                self.last_summary_time = datetime.utcnow()
+                self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
                 # Daily loss limit (2% of initial capital by default)
                 self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
+                self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
             # Wait for a new depth tick
             if not getattr(self, "tick_received", False):
