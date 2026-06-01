@@ -1,4 +1,4 @@
-"""btc_scalp_bot – A minimal implementation of Fabio Valentini's scalping strategy
+   """btc_scalp_bot – A minimal implementation of Fabio Valentini's scalping strategy
 
 Features
 --------
@@ -20,7 +20,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -53,6 +53,11 @@ logging.basicConfig(
     handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("btc_scalp_bot")
+
+
+def utcnow() -> datetime:
+    """Naive UTC datetime (replaces deprecated datetime.utcnow())."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 # ---------------------------------------------------------------------------
 # Helper utilities – Paper trading state
@@ -102,7 +107,7 @@ class PaperWallet:
             "qty": qty,
             "sl": sl,
             "tp": tp,
-            "opened_at": datetime.utcnow(),
+            "opened_at": utcnow(),
         }
         # Deduct the risked amount from cash (margin placeholder)
         self.usdt -= size_usdt
@@ -226,10 +231,10 @@ class ScalpingBot:
         self.last_price: float = 0.0
         self.depth: Dict = {"bids": [], "asks": []}
         self.consecutive_losses = 0
-        self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        self.daily_reset_time = utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         # Daily loss limit (2% of initial capital by default)
         self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
-        self.last_summary_time = datetime.utcnow()
+        self.last_summary_time = utcnow()
 
     # -----------------------------------------------------------------------
     # WebSocket handling (depth stream)
@@ -299,7 +304,7 @@ class ScalpingBot:
         self.start_ws()
         while True:
             # Restrict trading to Mon‑Fri, 6 pm‑10 pm IST (12:30‑16:30 UTC)
-            now_utc = datetime.utcnow()
+            now_utc = utcnow()
             now_ist = now_utc + timedelta(hours=5, minutes=30)
             can_trade_time = now_ist.weekday() < 5 and 18 <= now_ist.hour < 22
             # If outside allowed window, skip entry logic but continue processing depth
@@ -310,12 +315,12 @@ class ScalpingBot:
                 time.sleep(30)  # pause longer when market is closed
                 continue
             # Daily reset of loss counter
-            if datetime.utcnow() >= self.daily_reset_time:
+            if utcnow() >= self.daily_reset_time:
                 if self.paper_wallet:
                     self.paper_wallet.reset_daily()
-                self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                self.daily_reset_time = utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
                 # Update summary time after daily reset
-                self.last_summary_time = datetime.utcnow()
+                self.last_summary_time = utcnow()
                 # Daily loss limit (2% of initial capital by default)
                 self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
 
