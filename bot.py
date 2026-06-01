@@ -20,7 +20,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -102,7 +102,7 @@ class PaperWallet:
             "qty": qty,
             "sl": sl,
             "tp": tp,
-            "opened_at": datetime.now(timezone.utc).replace(tzinfo=None),
+            "opened_at": datetime.utcnow(),
         }
         # Deduct the risked amount from cash (margin placeholder)
         self.usdt -= size_usdt
@@ -128,57 +128,6 @@ class PaperWallet:
             self.daily_loss += loss_amount
             self.consecutive_losses += 1
             logger.info(f"[Paper] Consecutive losses: {self.consecutive_losses}, Daily loss: {self.daily_loss:.2f} USDT")
-        else:
-            self.consecutive_losses = 0
-        self.position = None
-    def reset_daily(self):
-        self.consecutive_losses = 0
-        logger.info("Daily loss counter reset.")
-
-    def equity(self) -> float:
-        """Current equity in USDT (USDT + BTC * last_price)."""
-        price = self._last_price if hasattr(self, "_last_price") else 0.0
-        return self.usdt + self.btc * price
-
-    def update_price(self, price: float):
-        self._last_price = price
-
-    def open_position(self, side: str, size_usdt: float, entry_price: float, sl: float, tp: float):
-        """Record a simulated position.
-
-        side – "long" or "short"
-        size_usdt – USD amount risked (not full notional)
-        """
-        qty = size_usdt / entry_price
-        self.position = {
-            "side": side,
-            "entry_price": entry_price,
-            "size_usdt": size_usdt,
-            "qty": qty,
-            "sl": sl,
-            "tp": tp,
-            "opened_at": datetime.now(timezone.utc).replace(tzinfo=None),
-        }
-        # Adjust cash for the used margin (full notional for simplicity)
-        self.usdt -= size_usdt
-        logger.info(f"[Paper] Opened {side} {qty:.6f} BTC @ {entry_price:.2f} (SL={sl:.2f} TP={tp:.2f})")
-
-    def close_position(self, price: float):
-        if not self.position:
-            return
-        side = self.position["side"]
-        qty = self.position["qty"]
-        pnl = (price - self.position["entry_price"]) * qty
-        if side == "short":
-            pnl = -pnl
-        self.usdt += self.position["size_usdt"] + pnl  # return used margin + PnL
-        self.btc += 0  # no actual BTC holds in paper mode
-        profit = pnl
-        logger.info(f"[Paper] Closed {side} @ {price:.2f}, PnL = {profit:.2f} USDT")
-        # Update loss counter
-        if profit < 0:
-            self.consecutive_losses += 1
-            logger.info(f"[Paper] Consecutive losses: {self.consecutive_losses}")
         else:
             self.consecutive_losses = 0
         self.position = None
@@ -230,31 +179,34 @@ def compute_depth_lvns(depth: Dict) -> Tuple[List[float], float]:
     lvns = [float(p) for p, v in zip(prices, volumes) if v < threshold]
     return lvns, poc_price
 
-def should_enter_trade(state: str, lvns: List[float], price: float, depth: Dict) -> bool:
-    """Determine if entry conditions are met.
+def should_enter_trade(state: str, lvns: List[float], price: float, depth: Dict) -> Optional[str]:
+    """Determine entry direction.
 
+    Returns "long", "short", or None.
     - Price must be at (or very near) an LVN.
-    - Depth must show absorption on the opposite side and a spike of market‑order flow.
-    This is a highly simplified version; replace with more sophisticated footprint checks.
+    - Depth must show absorption on the supporting side.
     """
     if state != "imbalance":
-        return False
+        return None
     # Proximity check (within 0.1% of LVN)
     near_lvn = any(abs(price - lvn) / lvn < 0.001 for lvn in lvns)
     if not near_lvn:
-        return False
-    # Simple absorption test: large bid depth supporting price
+        return None
     bid_depth = sum(amt for p, amt in depth["bids"] if p >= price)
     ask_depth = sum(amt for p, amt in depth["asks"] if p <= price)
-    # If bid depth is > 3× ask depth we consider it absorption for a long trade
-    return bid_depth > 3 * ask_depth
+    # Bid absorption (buyers defending) -> long; ask absorption (sellers capping) -> short.
+    if bid_depth > 3 * ask_depth:
+        return "long"
+    if ask_depth > 3 * bid_depth:
+        return "short"
+    return None
 
 # ---------------------------------------------------------------------------
 # Main Bot Class
 # ---------------------------------------------------------------------------
 class ScalpingBot:
     SYMBOL = "BTC/USDT"
-    WS_ENDPOINT = "wss://data-stream.binance.vision/ws/btcusdt@depth20"
+    WS_ENDPOINT = "wss://stream.binance.com:9443/ws/btcusdt@depth20"
 
     def __init__(self, config: dict):
         self.config = config
@@ -267,15 +219,17 @@ class ScalpingBot:
                 "secret": config.get("secret"),
                 "enableRateLimit": True,
             })
+        # Klines are a public endpoint and never need authentication, so always
+        # use an unauthenticated client for market data (avoids signing public calls).
+        self.public_exchange = ccxt.binance({"enableRateLimit": True})
         self.paper_wallet = PaperWallet() if MODE == "paper" else None
         self.last_price: float = 0.0
         self.depth: Dict = {"bids": [], "asks": []}
         self.consecutive_losses = 0
-        self.daily_reset_time = datetime.now(timezone.utc).replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
+        self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         # Daily loss limit (2% of initial capital by default)
         self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
-        self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
+        self.last_summary_time = datetime.utcnow()
 
     # -----------------------------------------------------------------------
     # WebSocket handling (depth stream)
@@ -345,7 +299,7 @@ class ScalpingBot:
         self.start_ws()
         while True:
             # Restrict trading to Mon‑Fri, 6 pm‑10 pm IST (12:30‑16:30 UTC)
-            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            now_utc = datetime.utcnow()
             now_ist = now_utc + timedelta(hours=5, minutes=30)
             can_trade_time = now_ist.weekday() < 5 and 18 <= now_ist.hour < 22
             # If outside allowed window, skip entry logic but continue processing depth
@@ -356,15 +310,14 @@ class ScalpingBot:
                 time.sleep(30)  # pause longer when market is closed
                 continue
             # Daily reset of loss counter
-            if datetime.now(timezone.utc).replace(tzinfo=None) >= self.daily_reset_time:
+            if datetime.utcnow() >= self.daily_reset_time:
                 if self.paper_wallet:
                     self.paper_wallet.reset_daily()
-                self.daily_reset_time = datetime.now(timezone.utc).replace(tzinfo=None).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                self.daily_reset_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
                 # Update summary time after daily reset
-                self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
+                self.last_summary_time = datetime.utcnow()
                 # Daily loss limit (2% of initial capital by default)
                 self.daily_loss_limit = (self.config.get("daily_loss_percent", 2) / 100.0) * (self.paper_wallet.initial_capital if self.paper_wallet else 0)
-                self.last_summary_time = datetime.now(timezone.utc).replace(tzinfo=None)
 
             # Wait for a new depth tick
             if not getattr(self, "tick_received", False):
@@ -373,9 +326,10 @@ class ScalpingBot:
             self.tick_received = False
             # Pull recent higher‑timeframe klines for market‑state detection
             try:
-                df = fetch_kline(self.exchange, self.SYMBOL, timeframe="30m", limit=5)
+                df = fetch_kline(self.public_exchange, self.SYMBOL, timeframe="30m", limit=5)
             except Exception as e:
                 logger.error(f"Failed to fetch klines: {e}")
+                time.sleep(30)  # back off on failure to avoid hammering the API / bans
                 continue
             market_state = detect_market_state(df)
 
@@ -390,7 +344,7 @@ class ScalpingBot:
                 wallet = None  # placeholder
 
             # If we have an open paper position, evaluate SL/TP
-            if MODE == "paper" and wallet.position:
+            if MODE == "paper" and wallet and wallet.position:
                 pos = wallet.position
                 if pos["side"] == "long" and (self.last_price <= pos["sl"] or self.last_price >= pos["tp"]):
                     wallet.close_position(self.last_price)
@@ -400,17 +354,16 @@ class ScalpingBot:
                     continue
 
             # Enforce three‑loss rule (paper mode only for now)
-            if MODE == "paper" and wallet.consecutive_losses >= MAX_LOSSES:
+            if MODE == "paper" and wallet and wallet.consecutive_losses >= MAX_LOSSES:
                 logger.info("Three consecutive losses reached – pausing trading for today.")
                 time.sleep(60)  # sleep and re‑check later
                 continue
 
             # ENTRY LOGIC
-            if should_enter_trade(market_state, lvns, self.last_price, self.depth):
-                # Determine side – simplified: go long in imbalanced up‑move, short otherwise
-                side = "long" if market_state == "imbalance" else "short"
+            side = should_enter_trade(market_state, lvns, self.last_price, self.depth)
+            if side:
                 # Risk calculation – amount of USDT to risk
-                if MODE == "paper":
+                if MODE == "paper" and wallet:
                     equity = wallet.equity()
                 else:
                     # Live: fetch balance from exchange (placeholder)
@@ -419,18 +372,28 @@ class ScalpingBot:
                 # Simple stop: 1 tick (0.1% of price) for demo purposes
                 tick = self.last_price * 0.001
                 sl = self.last_price - tick if side == "long" else self.last_price + tick
-                # Take profit = POC (from depth) – could be refined
+                # Take profit = POC (from depth)
                 tp = poc
-                # Compute quantity based on risk (approximate, ignoring fees)
-                qty = risk_amount / abs(self.last_price - sl)
-                # Place order
-                order = self.place_order("buy" if side == "long" else "sell", qty, self.last_price)
-                if MODE == "paper":
-                    wallet.open_position(side, risk_amount, self.last_price, sl, tp)
+                # Guard: POC must be valid and on the correct side of entry, else skip.
+                # (compute_depth_lvns returns poc=0.0 when depth is empty.)
+                valid_tp = (
+                    tp > 0
+                    and ((side == "long" and tp > self.last_price)
+                         or (side == "short" and tp < self.last_price))
+                )
+                if not valid_tp:
+                    logger.info(f"Skipping {side} entry: invalid TP (poc={tp:.2f}, price={self.last_price:.2f})")
                 else:
-                    # In live mode you would store the order ID and monitor fill status
-                    pass
-                logger.info(f"Entered {side.upper()} position at {self.last_price:.2f}, SL={sl:.2f}, TP={tp:.2f}")
+                    # Compute quantity based on risk (approximate, ignoring fees)
+                    qty = risk_amount / abs(self.last_price - sl)
+                    # Place order
+                    order = self.place_order("buy" if side == "long" else "sell", qty, self.last_price)
+                    if MODE == "paper" and wallet:
+                        wallet.open_position(side, risk_amount, self.last_price, sl, tp)
+                    else:
+                        # In live mode you would store the order ID and monitor fill status
+                        pass
+                    logger.info(f"Entered {side.upper()} position at {self.last_price:.2f}, SL={sl:.2f}, TP={tp:.2f}")
 
             # Throttle loop to avoid hammering the API (depth updates arrive ~100 ms)
             time.sleep(0.2)
