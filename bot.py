@@ -306,6 +306,19 @@ class ScalpingBot:
             # Restrict trading to Mon‑Fri, 6 pm‑10 pm IST (12:30‑16:30 UTC)
             now_utc = utcnow()
             now_ist = now_utc + timedelta(hours=5, minutes=30)
+
+            # Heartbeat: log a status line every 5 minutes so the deploy logs
+            # show the bot is alive even when it's quietly listening / out of session.
+            if (now_utc - self.last_summary_time).total_seconds() >= 300:
+                in_session = now_ist.weekday() < 5 and 18 <= now_ist.hour < 22
+                state = "in session" if in_session else "out of session"
+                pos = "in position" if (self.paper_wallet and self.paper_wallet.position) else "flat"
+                logger.info(
+                    f"Heartbeat: alive, {state}, price={self.last_price:.2f}, {pos} "
+                    f"(IST {now_ist:%H:%M})"
+                )
+                self.last_summary_time = now_utc
+
             can_trade_time = now_ist.weekday() < 5 and 18 <= now_ist.hour < 22
             # If outside allowed window, skip entry logic but continue processing depth
             if not can_trade_time:
